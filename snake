@@ -1,0 +1,1016 @@
+;============================================================
+; 文件名称: snake.asm 
+; 功能描述: 
+;     行: CS1(600H), CS2(640H)  列: CS3(680H), CS4(6C0H)
+;============================================================
+
+IOY0         EQU   0600H          ;片选IOY0对应的端口始地址
+MY8255_A     EQU   IOY0+00H*2     ;8255的A口地址
+MY8255_B     EQU   IOY0+01H*2     ;8255的B口地址
+MY8255_C     EQU   IOY0+02H*2     ;8255的C口地址
+MY8255_CON   EQU   IOY0+03H*2     ;8255的控制寄存器地址
+
+ROW1		EQU 0600H			;端口定义IOY0
+ROW2		EQU 0640H			;端口定义IOY1
+COL1		EQU 0680H			;端口定义IOY2
+COL2		EQU 06C0H			;端口定义IOY3
+STACK1	SEGMENT STACK
+		DW 256 DUP(?)
+STACK1	ENDS
+;数据段
+;数据字段为汉字点阵库
+;本文件为16×16点阵中文字库文件,字的横向8点构成一字节,
+;左边点在字节的低位,字符点阵四角按左上角→右上角→左下
+;角→右下角取字
+
+DATA	SEGMENT
+
+SnakeHead DB 06H,0CH
+SnakeTail DB 03H,0CH
+
+DTABLE	DB 3FH,06H,5BH,4FH,66H,6DH,7DH,07H
+		DB 7FH,6FH,77H,7CH,39H,5EH,79H,71H
+			
+	
+Direction DB 07H,00H
+Food	DB 00H,00H,00H,00H	
+
+Length	DB 00H,00H
+
+;实验箱上每行分为1个二进制，一个二进制表对应一个八进制数
+
+;西
+HZDOTht DW 0000H
+		DW 0000H
+		DW 0000H
+		DW 0000H
+		DW 0000H
+		DW 0000H
+		DW 0000H
+		DW 0000H
+		
+		DW 0000H
+		DW 0000H
+		DW 0000H
+		DW 0000H
+		DW 0078H
+		DW 0000H
+		DW 0000H
+		DW 0000H
+
+		
+DATA	ENDS		
+;
+;
+	
+CODE	SEGMENT
+		ASSUME	CS:CODE, DS:DATA
+START:	MOV AX, DATA
+		MOV DS, AX
+		MOV DX, ROW1
+		MOV AL, 00H
+		OUT DX, AL
+		MOV DX, ROW2
+		OUT DX, AL
+		MOV AL, 0ffH
+		MOV DX, COL1
+		OUT DX, AL
+		MOV DX, COL2
+		OUT DX, AL
+		
+		CALL MakeFood
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+KEYBODSTART:	MOV AX,DATA
+		MOV DS,AX
+ 		MOV SI,3000H
+		
+		MOV AL,00H
+		MOV [SI],AL					;清显示缓冲
+		
+		MOV DI,3000H
+
+		MOV DX,MY8255_CON			;写8255控制字
+		MOV AL,81H					;1000 0001 
+		OUT DX,AL
+
+BEGIN:	
+		;MOV SI,3000H
+		CALL DIS					;调用显示子程序
+		CALL CLEAR					;清屏
+		CALL CCSCAN					;扫描
+		;CALL DISP
+		JZ	INK0					;等于0 无键按下
+		JNZ INK1 					;不等于0 有键按下   INK1 
+		 
+
+
+		POP CX		
+		JMP BEGIN
+		
+INK0:								;无键按下，刷新led区域
+		CALL DISP
+		;JMP BEGIN
+		CALL ISEat
+		
+		PUSH CX						;延时程序
+		MOV CX, 0F000H
+ALLDELAY:	
+		PUSH AX
+		POP AX
+		LOOP ALLDELAY		
+		CALL ISEat
+				
+		PUSH AX
+		MOV AX,0000H
+		LEA SI, Direction			;NO KEY DOWN AND GET THE GO DIRECTION
+		MOV AL,[SI]
+		CMP AL,02H
+		JNZ INK0DIR1
+		CALL GOUP
+		CALL ISEat
+		JMP INK0DIREND
+INK0DIR1:
+		CMP AL,05H
+		JNZ INK0DIR2
+		CALL GOLEFT
+		CALL ISEat
+		JMP INK0DIREND
+INK0DIR2:
+		CMP AL,06H
+		JNZ INK0DIR3
+		CALL GODOWN
+		CALL ISEat
+		JMP INK0DIREND
+INK0DIR3:
+		CMP AL,07H
+		JNZ INK0DIREND
+		CALL GORIGHT
+		CALL ISEat
+
+INK0DIREND:
+		POP AX
+		
+		;MOV SI, OFFSET HZDOTht
+		;CALL DISP			
+		;JMP NOKEYRET
+		;JMP BEGIN
+		
+INK1:	CALL DIS
+		CALL KDALLY
+		CALL KDALLY
+		CALL CLEAR
+		CALL CCSCAN                 ;去 抖
+		JNZ INK2					;有键按下，转到INK2
+		;JNZ TOLED					;有键按下，转到LED
+		JMP BEGIN
+;确定按下键的位置
+INK2:	MOV CH,0FEH     	; 1111 1110
+		MOV CL,00H
+COLUM:	MOV AL,CH
+		MOV DX,MY8255_A 
+		OUT DX,AL
+
+		MOV DX,MY8255_C 
+		IN AL,DX
+L1:		TEST AL,01H         			;is L1? 0001
+		JNZ L2
+		MOV AL,00H          			;L1
+		JMP KCODE
+L2:		TEST AL,02H         			;is L2?  0010
+		JNZ L3
+		MOV AL,04H          			;L2
+		JMP KCODE
+L3:		TEST AL,04H         			;is L3?
+		JNZ L4
+		MOV AL,08H          			;L3
+		JMP KCODE
+L4:		TEST AL,08H         			;is L4?
+		JNZ NEXT
+		MOV AL,0CH          			;L4
+
+KCODE:	ADD AL,CL    ;+00
+		CALL PUTBUF
+		PUSH AX
+KON: 	CALL DIS
+		CALL CLEAR
+		CALL CCSCAN
+		JNZ KON
+		POP AX
+
+NEXT:	INC CL    ;01
+		MOV AL,CH
+		TEST AL,08H
+		JZ KERR
+		ROL AL,1
+		MOV CH,AL
+		JMP COLUM
+KERR:	JMP BEGIN
+
+;TOLED:	JMP BG0			;中转到led
+
+CCSCAN:	MOV AL,00H					;键盘扫描子程序
+		MOV DX,MY8255_A  
+		OUT DX,AL
+		MOV DX,MY8255_C 
+		IN  AL,DX
+		NOT AL         ;判断 键盘按下 1111 1110 取反 0000 0001
+		AND AL,0FH     ;0000 1111
+		RET
+
+CLEAR:	MOV DX,MY8255_B 			;清屏子程序
+		MOV AL,00H
+		OUT DX,AL					;向B口写 00H
+		RET
+
+DIS:	PUSH AX						;显示子程序
+		MOV SI,3000H
+		MOV DL,0FFH
+		MOV AL,DL                 ;1101 1111 往第一个数码管写数字
+
+AGAIN:	PUSH DX
+
+		MOV DX,MY8255_A 
+		OUT DX,AL			;A口写00
+
+		MOV AL,[SI]
+		MOV BX,OFFSET DTABLE
+		AND AX,00FFH		;1111 1111
+		ADD BX,AX			;
+		MOV AL,[BX]
+		MOV DX,MY8255_B 
+		OUT DX,AL			;向B口写数据
+
+		CALL KDALLY
+		POP DX
+
+OUT1:	POP AX
+		RET
+
+KDALLY:	PUSH CX						;延时子程序
+		MOV CX,0006H
+T1:		MOV AX,009FH			;减   9F*6次
+T2:		DEC AX
+		JNZ T2
+		LOOP T1
+		POP CX
+		RET
+
+PUTBUF:	MOV SI,DI					;存键盘值到相应位的缓冲中
+		MOV [SI],AL					; 3005H 写到 2FFFH
+		
+
+		;JMP BG0
+
+		LEA SI,Direction	
+
+		CMP AL,02H		;上
+		JNZ RUN0
+		MOV [SI],AL
+		CALL GOUP
+		;CALL ISEat		
+RUN0:	CMP AL,06H		;下
+		JNZ RUN1
+		MOV [SI],AL
+		CALL GODOWN
+		;CALL ISEat
+RUN1:	CMP AL,05H		;左
+		JNZ RUN2
+		MOV [SI],AL
+		CALL GOLEFT
+		;CALL ISEat
+RUN2:	CMP AL,07H		;右
+		JNZ RUN3
+		MOV [SI],AL
+		CALL GORIGHT
+	
+		;CALL ISEat
+RUN3:	RET		
+		;JNZ GOBACK		
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+GOUP:	PUSH AX
+		PUSH BX
+		PUSH CX
+		MOV  AX,0000H
+		LEA SI,SnakeHead
+		MOV BL,[SI]
+		INC SI
+		MOV	AL,[SI]
+		LEA SI,HZDOTht		
+		MOV CX,AX
+		SUB CX,0001H
+UADDSI:	INC SI
+		INC SI
+		LOOP UADDSI	
+		
+		MOV CL,BL	
+		MOV AX,[SI]	;找到对应新头部行		
+		MOV BX,0001H	;
+		ROL BX,CL
+		OR  AX,BX	
+		MOV [SI], AX		
+		;灭尾
+		MOV  AX,0000H
+		LEA SI,SnakeTail
+		MOV BL,[SI]
+		INC SI
+		MOV	AL,[SI]
+		LEA SI,HZDOTht
+		MOV CX,AX
+UADDSI2:	INC SI
+		INC SI
+		LOOP UADDSI2		
+		MOV CL,BL
+		MOV AX,[SI]	
+		MOV BX,0FFFEH	;1111 1110	
+		ROL BX,CL	
+		AND AX,BX		;原尾部置0
+		MOV [SI], AX
+		;改变头尾位置标记
+		LEA SI,SnakeHead
+		MOV CL,[SI]		;H.X
+		INC SI
+		MOV	AL,[SI]		;更改H.Y
+		SUB AL,01H
+		MOV [SI], AL		
+		
+		CALL RefreshTail	;更改尾部标记
+	
+;		LEA SI,SnakeTail
+;		MOV AL,[SI]		;T.X
+;		CMP AL,CL
+;		JBE NOTATR		; T.X < = H.X
+;		MOV BL,AL		; T.X > H.X
+;		SUB BL,01H
+;		MOV [SI],BL
+;		JMP GOUPEND
+;NOTATR:	CMP AL,CL
+;		JZ  ISEQU
+;		MOV BL,AL		; T.X < H.X
+;		ADD BL,01H
+;		MOV [SI],BL
+;		JMP GOUPEND
+;ISEQU:	INC SI			; T.X = H.X
+;		MOV AL,[SI]		;T.Y
+;		SUB AL,01H
+;		MOV [SI],AL
+GOUPEND:	
+		CALL DISP
+		POP	 AX
+		POP  BX
+		POP  CX
+		;JMP BG0			
+		;JMP GOBACK
+		RET
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+GODOWN:	PUSH AX
+		PUSH BX
+		PUSH CX
+		MOV  AX,0000H
+		LEA SI,SnakeHead
+		MOV BL,[SI]
+		INC SI
+		MOV	AL,[SI]
+		LEA SI,HZDOTht		
+		MOV CX,AX
+		ADD CX,0001H
+DADDSI:	INC SI
+		INC SI
+		LOOP DADDSI	
+		
+		MOV CL,BL	
+		MOV AX,[SI]		;找到对应新头部行		
+		MOV BX,0001H	;
+		ROL BX,CL
+		OR  AX,BX		;点亮新头
+		MOV [SI], AX		
+						;灭尾
+		MOV AX,0000H
+		LEA SI,SnakeTail
+		MOV BL,[SI]
+		INC SI
+		MOV	AL,[SI]
+		LEA SI,HZDOTht
+		MOV CX,AX
+DADDSI2:INC SI
+		INC SI
+		LOOP DADDSI2		
+		MOV CL,BL
+		MOV AX,[SI]	
+		MOV BX,0FFFEH	;1111 1110	
+		ROL BX,CL	
+		AND AX,BX		;原尾部置0
+		MOV [SI], AX
+						;改变头尾位置标记
+		LEA SI,SnakeHead
+		MOV CL,[SI]		;H.X
+		INC SI
+		MOV	AL,[SI]		;H.Y
+		ADD AL,01H		;H.Y+1
+		MOV [SI], AL		
+			
+		CALL RefreshTail	;更改尾部标记
+		
+;		LEA SI,SnakeTail
+;		MOV AL,[SI]		;T.X
+;		CMP AL,CL
+;		JBE NOTATR		; T.X < = H.X
+;		MOV BL,AL		; T.X > H.X
+;		SUB BL,01H
+;		MOV [SI],BL
+;		JMP GOUPEND
+;NOTATR:	CMP AL,CL
+;		JZ  ISEQU
+;		MOV BL,AL		; T.X < H.X
+;		ADD BL,01H
+;		MOV [SI],BL
+;		JMP GOUPEND
+;ISEQU:	INC SI			; T.X = H.X
+;		MOV AL,[SI]		;T.Y
+;		ADD AL,01H
+;		MOV [SI],AL
+GODOWNEND:
+		CALL DISP
+		POP	 CX
+		POP  BX
+		POP  AX
+		;JMP BG0			
+		;JMP GOBACK
+		RET
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+GOLEFT:	PUSH AX
+		PUSH BX
+		PUSH CX
+		MOV AX,0000H
+		LEA SI,SnakeHead
+		MOV BL,[SI]
+		INC SI
+		MOV	AL,[SI]
+		LEA SI,HZDOTht		
+		MOV CX,AX
+LADDSI:	INC SI
+		INC SI
+		LOOP LADDSI
+		
+		MOV CL,BL
+		MOV AX,[SI]	
+		MOV BX,0001H	;
+		SUB CL,01H
+		ROL BX,CL
+		OR  AX,BX
+		MOV [SI], AX		
+		
+		;灭尾
+		MOV AX,0000H
+		MOV BX,0000H
+		LEA SI,SnakeTail
+		MOV BL,[SI]
+		INC SI
+		MOV	AL,[SI]
+		LEA SI,HZDOTht
+		MOV CX,AX
+LADDSI2:INC SI
+		INC SI
+		LOOP LADDSI2		
+		MOV CL,BL
+		MOV AX,[SI]	
+		MOV BX,0FFFEH	;1111 1110	
+		ROL BX,CL	
+		AND AX,BX		;原尾部置0
+		MOV [SI], AX
+		
+		;改变头尾位置标记
+		LEA SI,SnakeHead
+		MOV	AL,[SI]		
+		SUB AL,01H		;H.X-1
+		MOV [SI], AL
+		INC SI
+		MOV BL,[SI]
+			
+		CALL RefreshTail	;更改尾部标记
+		
+;		LEA SI,SnakeTail
+;		INC SI
+;		MOV	AL,[SI]
+;		CMP AL,BL
+;		JZ  LTLSub
+;		JNZ LTRSub
+;LTRSub:	SUB AL,01H
+;		MOV [SI], AL
+;		JMP GOLEFTEND
+;LTLSub: LEA SI,SnakeTail
+;		MOV	AL,[SI]
+;		SUB AL,01H
+;		MOV [SI], AL
+GOLEFTEND:
+		CALL DISP	
+		POP	 CX
+		POP  BX
+		POP  AX
+		;JMP BG0			
+		;JMP GOBACK
+		RET	
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;		
+GORIGHT:	PUSH AX
+		PUSH BX
+		PUSH CX
+		MOV AX,0000H
+		LEA SI,SnakeHead
+		MOV BL,[SI]
+		INC SI
+		MOV	AL,[SI]
+		LEA SI,HZDOTht		
+		MOV CX,AX
+RADDSI:	INC SI
+		INC SI
+		LOOP RADDSI		
+		
+		MOV CL,BL
+		MOV AX,[SI]	
+		MOV BX,0001H	;
+		ADD CL,01H
+		ROL BX,CL
+		OR  AX,BX
+		MOV [SI], AX
+		
+		;灭尾
+		MOV AX,0000H
+		MOV BX,0000H
+		LEA SI,SnakeTail
+		MOV BL,[SI]
+		INC SI
+		MOV	AL,[SI]
+		LEA SI,HZDOTht
+		MOV CX,AX
+RADDSI2:	INC SI
+		INC SI
+		LOOP RADDSI2		
+		MOV CL,BL
+		MOV AX,[SI]	
+		MOV BX,0FFFEH	
+		ROL BX,CL
+		AND AX,BX
+		MOV [SI], AX
+		
+		;改变头尾位置标记
+		LEA SI,SnakeHead
+		MOV	AL,[SI]
+		ADD AL,01H
+		MOV [SI], AL
+		INC SI
+		MOV BL,[SI]
+			
+		CALL RefreshTail	;更改尾部标记
+		
+;		LEA SI,SnakeTail
+;		INC SI
+;		MOV	AL,[SI]
+;		CMP AL,BL
+;		JZ  TLSub
+;		JNZ TRSub
+;TRSub:				
+;		SUB AL,01H
+;		MOV [SI], AL
+;		JMP GOLEFTEND
+;TLSub:
+;		LEA SI,SnakeTail
+;		MOV	AL,[SI]
+;		ADD AL,01H
+;		MOV [SI], AL
+GORIGHTEND:				
+		CALL DISP
+		POP	 AX
+		POP  BX
+		POP  CX
+		;JMP BG0		
+		;JMP GOBACK
+GOBACK:	RET
+GOEND:
+;CODE	ENDS
+		;END START
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+RefreshTail:	
+		PUSH AX
+		PUSH BX
+		PUSH CX	
+		
+		CALL ISEat		
+		MOV CX,1000H
+R1:		PUSH AX
+		POP AX
+		LOOP R1
+				
+		CALL ISEat		
+		MOV CX,1000H
+R2:		PUSH AX
+		POP AX
+		LOOP R2
+				
+		LEA SI, Food
+		INC SI
+		INC SI
+		INC SI
+		MOV AL,[SI]
+		CMP AL,11H
+		JZ TOEATEND
+				
+		MOV AX,0000H
+		MOV BX,0000H
+		MOV CX,0000H
+		LEA SI,SnakeTail
+		MOV BL,[SI]		;T.X
+		INC SI
+		MOV	AL,[SI]		;T.Y
+		LEA SI,HZDOTht
+		MOV CX,AX
+RTADDSI:	INC SI
+		INC SI
+		LOOP RTADDSI		
+		MOV CL,BL
+		MOV AX,[SI]	
+		MOV BX,0FFFEH	;1111 1110
+		SUB CL,01H	
+		ROL BX,CL
+		;MOV CX,AX
+		OR AX,BX	
+		CMP AX,0FFFFH
+		JNZ RT1
+		LEA SI,SnakeTail	;1T
+		MOV AL,[SI]
+		SUB AL,01H
+		MOV [SI],AL
+		JMP RTENDL
+RT1:	MOV AX,0000H
+		MOV BX,0000H
+		LEA SI,SnakeTail
+		MOV BL,[SI]
+		INC SI
+		MOV	AL,[SI]
+		LEA SI,HZDOTht
+		MOV CX,AX
+RTADDSI2:	INC SI
+		INC SI
+		LOOP RTADDSI2		
+		MOV CL,BL
+		MOV AX,[SI]	
+		MOV BX,0FFFEH	;1111 1110
+		ADD CL,01H	
+		ROL BX,CL
+		OR AX,BX		
+		CMP AX,0FFFFH
+		JNZ RT2
+		LEA SI,SnakeTail	;T1
+		MOV AL,[SI]
+		ADD AL,01H
+		MOV [SI],AL
+		JMP RTENDL
+
+TOEATEND:	JMP RTEATENDL		
+		
+				
+RT2:	MOV AX,0000H
+		MOV BX,0000H
+		LEA SI,SnakeTail
+		MOV BL,[SI]
+		INC SI
+		MOV	AL,[SI]
+		LEA SI,HZDOTht
+		MOV CX,AX
+		SUB CX,01H
+RTADDSI3:	INC SI
+		INC SI
+		LOOP RTADDSI3		
+		MOV CL,BL
+		MOV AX,[SI]	
+		MOV BX,0FFFEH	;1111 1110	
+		ROL BX,CL
+		MOV CX,AX
+		OR CX,BX
+		CMP CX,0FFFFH
+		JNZ RT3
+		LEA SI,SnakeTail	;1/T
+		INC SI
+		MOV AL,[SI]		;T.Y
+		SUB AL,01H
+		MOV [SI],AL
+		JMP RTENDL		
+RT3:	LEA SI,SnakeTail	;T/1
+		INC SI
+		MOV AL,[SI]		;T.Y
+		ADD AL,01H
+		MOV [SI],AL
+		JMP RTENDL
+RTEATENDL:	
+		LEA SI,Length
+		MOV AL,[SI]
+		ADD AL,01H
+		MOV [SI],AL
+		
+		LEA SI, Food
+		MOV AL,00H	
+		MOV [SI],AL	
+		INC SI
+		MOV [SI],AL	
+		INC SI
+		MOV [SI],AL	
+		INC SI
+		MOV AL,00H
+		MOV [SI],AL	
+		CALL MakeFood		
+
+		
+RTENDL:	
+		CALL ISEat	
+		POP	 CX
+		POP  BX
+		POP  AX
+		RET
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+BG0:	MOV AX, 160
+		MOV SI, OFFSET HZDOTht
+BG1:	CALL DISP
+
+		;JMP KEYBODSTART
+		;JMP GOUP
+		;ADD SI, 2
+		DEC AX
+		JZ BG0
+		JMP BG1
+;======显示汉字子程序======
+;入口参数: SI = 存放字起始地址	
+DISP:	
+
+		;CALL ISEat
+		CALL ISGameEND
+
+		MOV SI, OFFSET HZDOTht
+		MOV AX, 0000H
+		MOV BX, 0000H
+		MOV CX, 000FH
+		MOV DX, 0000H
+		PUSH AX		
+ML0:	PUSH CX
+		MOV BL, 01H
+		MOV CX, 0008H
+ML1:	MOV DX, ROW1			;控制0--7行
+		MOV AL, 00H
+		OUT DX, AL
+		MOV AL, [SI]
+		NOT AL
+		MOV DX, COL1			;0--7列
+		OUT DX, AL
+		INC SI
+		MOV AL, [SI]
+		NOT AL
+		MOV DX, COL2			;8--15列
+		OUT DX, AL
+		INC SI
+		MOV DX, ROW1			;控制0--7行
+		MOV AL, BL
+		OUT DX, AL
+		ROL BL, 1
+		
+		CALL DELAY
+		LOOP ML1
+		MOV DX, ROW1
+		MOV AL, 00H
+		OUT DX, AL
+		MOV CX, 0008H
+ML2:	MOV DX, ROW2			;控制8--15行
+		MOV AL, 00H
+		OUT DX, AL
+		MOV AL, [SI]
+		NOT AL
+		MOV DX, COL1			;0--7列
+		OUT DX, AL
+		INC SI
+		MOV AL, [SI]
+		NOT AL
+		MOV DX, COL2			;8--15列
+		OUT DX, AL
+		INC SI
+		MOV DX, ROW2			;控制8--15行
+		MOV AL, BL
+		OUT DX, AL
+		ROL BL, 1
+		CALL DELAY
+		LOOP ML2
+		MOV DX, ROW2
+		MOV AL, 00H
+		OUT DX, AL
+		SUB SI, 32
+		POP CX
+		LOOP ML0
+		POP AX
+		RET	
+DELAY:	PUSH CX				;延时子程序
+		MOV CX, 0160H
+DL1:	PUSH AX
+		POP AX
+		LOOP DL1
+		POP CX
+		RET	
+
+MakeFood:
+		PUSH AX
+		PUSH BX	
+		PUSH CX	
+		PUSH DX				
+		
+		MOV AX,0000H
+		MOV BX,0000H
+		MOV CX,0000H
+		MOV DX,0000H
+		LEA SI, Food
+		MOV AL, [SI]
+		MOV BL, 00H
+		;CMP AL, BL
+		;JNZ NOMAKEFOOD
+		;JMP NOMAKEFOOD
+RAND1:	MOV AX, 000DH   ;产生从1到AX之间的随机数
+		MOV DX, 41H ;用端口43H
+		OUT DX, AX  ;有这句话后就可以产生从1到AX之间的随机数了
+		IN  AL, DX   ;产生的随机数AL
+		ADD AL, 01H
+		CMP AL, 0EH
+		AND AL, 0FH
+		;JG  RAND1
+		
+		MOV BL, AL
+		LEA SI, Food
+		INC SI
+		MOV [SI],BL	
+		
+RAND2:	MOV AX, 000DH   ;产生从1到AX之间的随机数
+		MOV DX, 41H ;用端口41H
+		OUT DX, AX  ;
+		IN  AL, DX   ;产生的随机数AL
+		ADD AL, 01H
+		CMP AL, 0EH
+		AND AL, 0FH
+		;JG  RAND2
+		
+		
+		INC SI
+		MOV [SI],AL
+		LEA SI,HZDOTht	
+		MOV CX,AX
+FOODADDSI:	INC SI
+		INC SI
+		LOOP FOODADDSI	
+		MOV AX,[SI]
+		MOV DX,0FFFEH
+		MOV CL,BL
+		ROL DX,CL		
+		OR  AX,DX
+		CMP AX,0FFFFH
+		JZ  RAND1
+		MOV AX,[SI]
+		MOV DX,0001H
+		MOV CL,BL
+		ROL DX,CL
+		OR  AX,DX
+		MOV [SI], AX
+				
+		LEA SI, Food	;防止再次产生
+		MOV AL,11H
+		MOV [SI],AL	
+			
+NOMAKEFOOD:		POP DX
+		POP CX
+		POP BX
+		POP AX
+		RET
+		
+ISEat:
+		PUSH AX
+		PUSH BX	
+		PUSH CX	
+		PUSH DX	
+		MOV AX,0000H
+		MOV BX,0000H
+		MOV CX,0000H
+		MOV DX,0000H
+
+		LEA SI,SnakeHead
+		MOV AL,[SI]		;H.X
+		INC SI
+		MOV BL,[SI]		;H.Y
+		LEA SI,Food
+		INC SI
+		MOV CL,[SI]		;F.X
+		INC SI
+		MOV DL,[SI]		;F.Y
+		
+		CMP AL,CL
+		JNZ	NOEatEND	
+		CMP BL,DL
+		JNZ	NOEatEND
+		;JMP NOEatEND	
+ISEatEND:	
+		LEA SI, Food
+		;MOV AL,00H	
+		;MOV [SI],AL	
+		INC SI
+		INC SI
+		INC SI
+		MOV AL,11H
+		MOV [SI],AL		;允许增长				
+			
+NOEatEND:	
+		POP DX
+		POP CX
+		POP BX
+		POP AX
+		RET
+		
+		
+		
+ISGameEND:
+		PUSH AX
+		PUSH BX	
+		PUSH CX	
+		PUSH DX	
+		MOV AX,0000H
+		MOV BX,0000H
+		MOV CX,0000H
+		MOV DX,0000H
+
+		LEA SI,SnakeHead
+		MOV AL,[SI]		;H.X
+		INC SI
+		MOV BL,[SI]		;H.Y
+		
+		CMP BL,00H
+		JNZ GE1
+		;END
+		
+		MOV DX, ROW1
+		MOV AL, 0FFH
+		OUT DX, AL
+		MOV DX, ROW2
+		OUT DX, AL
+		MOV AL, 00H
+		MOV DX, COL1
+		OUT DX, AL
+		MOV DX, COL2
+		OUT DX, AL
+
+		JMP GameEND
+		
+GE1:	CMP BL,0FH
+		JNZ ISGameENDEND		
+		;END
+
+		MOV DX, ROW1
+		MOV AL, 0FFH
+		OUT DX, AL
+		MOV DX, ROW2
+		OUT DX, AL
+		MOV AL, 00H
+		MOV DX, COL1
+		OUT DX, AL
+		MOV DX, COL2
+		OUT DX, AL
+
+		JMP GameEND
+			
+ISGameENDEND:	
+		POP DX
+		POP CX
+		POP BX
+		POP AX
+		RET
+
+GameEND:
+		MOV AX, 0153H
+		INT 10H					;显示字符
+		MOV AX, 0143H
+		INT 10H					
+		MOV AX, 014FH
+		INT 10H					
+		MOV AX, 0152H
+		INT 10H				
+		MOV AX, 0145H
+		INT 10H	
+		MOV AX, 013AH
+		INT 10H	
+		
+		LEA SI,Length
+		MOV BL,[SI]
+		OR	BX,0130H				
+		MOV AX, BX
+		INT 10H					
+		MOV AX, 0120H
+		INT 10H
+		MOV AX, 0120H
+		INT 10H
+		MOV AX, 0120H
+		INT 10H
+		MOV AX, 0120H
+		INT 10H
+		
+CODE	ENDS
+		END START
+
